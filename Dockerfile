@@ -24,4 +24,5 @@ COPY --chown=user . /app
 EXPOSE 7860
 
 # Command to run the app with a strict 200MB upload limit!
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.maxUploadSize=200"]
+# Command to run the app with XSRF disabled to allow file uploads in Hugging Face iframes
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.maxUploadSize=200", "--server.enableXsrfProtection=false"]
