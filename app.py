@@ -4,6 +4,7 @@ import ffmpeg
 import os
 import uuid
 import hashlib
+import shutil
 from transformers import pipeline
 
 # --- PAGE SETUP ---
@@ -34,10 +35,8 @@ def load_akan_model():
 def get_file_hash(uploaded_file):
     """Generates a unique SHA-256 hash for the uploaded video file."""
     sha256_hash = hashlib.sha256()
-    # Read the file in chunks so we don't crash the RAM on massive files
     for chunk in iter(lambda: uploaded_file.read(4096), b""):
         sha256_hash.update(chunk)
-    # Reset the file pointer back to the beginning so Streamlit can still read it later!
     uploaded_file.seek(0)
     return sha256_hash.hexdigest()
 
@@ -80,6 +79,17 @@ export_res = st.sidebar.selectbox(
     index=2
 )
 
+# --- NEW: CACHE MANAGEMENT ---
+st.sidebar.header("🗑️ Storage Management")
+st.sidebar.markdown("If your cloud server storage gets full, click below to securely wipe all saved videos and transcripts.")
+if st.sidebar.button("Clear Server Cache"):
+    if os.path.exists(CACHE_DIR):
+        # rmtree deletes the folder and everything inside it instantly
+        shutil.rmtree(CACHE_DIR)
+        # Recreate the empty folder so the app doesn't crash on the next upload
+        os.makedirs(CACHE_DIR)
+    st.sidebar.success("✅ Server cache completely wiped!")
+
 st.sidebar.header("🎨 Caption Styling")
 font_family = st.sidebar.selectbox("Font Style", ["Arial", "Impact", "Arial Black", "Verdana", "Courier New"])
 font_size = st.sidebar.slider("Text Size", 10, 100, 24)
@@ -105,16 +115,13 @@ st.info("⚠️ **Note:** To prevent server overload, maximum file upload size i
 uploaded_file = st.file_uploader("Upload a Video File", type=["mp4", "mov", "avi", "mkv"])
 
 if uploaded_file:
-    # 1. Generate the unique hash fingerprint for this exact video
     file_hash = get_file_hash(uploaded_file)
 
-    # 2. Define our file paths using the hash inside the cache folder
     input_video = os.path.join(CACHE_DIR, f"{file_hash}_input.mp4")
     output_srt = os.path.join(CACHE_DIR, f"{file_hash}_subs.srt")
     output_video = os.path.join(CACHE_DIR, f"{file_hash}_final.mp4")
     output_mp3 = os.path.join(CACHE_DIR, f"{file_hash}_audio.mp3")
 
-    # Save the input video to disk
     with open(input_video, "wb") as f:
         f.write(uploaded_file.read())
 
@@ -125,9 +132,7 @@ if uploaded_file:
     extract_mp3_only = col2.button("🎵 Extract MP3 Audio", type="secondary")
     generate_and_burn = col3.button("🎬 Generate & Burn Video", type="primary")
 
-    # --- LOGIC BRANCH 1: AUDIO EXTRACTION ---
     if extract_mp3_only:
-        # Check if we already extracted this audio before!
         if os.path.exists(output_mp3):
             st.success("⚡ Audio found in cache! Instant download ready.")
             with open(output_mp3, "rb") as f:
@@ -146,11 +151,7 @@ if uploaded_file:
                 except ffmpeg.Error as e:
                     st.error(f"FFmpeg Error: {e.stderr.decode('utf-8')}")
 
-    # --- LOGIC BRANCH 2: AI TRANSCRIPTION & VIDEO RENDERING ---
     elif generate_srt_only or generate_and_burn:
-
-        # --- THE CACHE CHECK ---
-        # If the SRT file already exists for this video, SKIP Phase 1, 2, and 3 entirely!
         if os.path.exists(output_srt):
             st.success("⚡ Previous transcription found in cache! Skipping AI processing...")
         else:
@@ -198,9 +199,8 @@ if uploaded_file:
 
             status_text.success("Phase 3/4 Complete! Transcription saved to cache.")
             progress_bar.progress(100)
-            status_text.empty() # Clear the progress bar text
+            status_text.empty()
 
-        # --- PHASE 4: RENDERING OR DOWNLOADING ---
         if generate_srt_only:
             st.success("📄 SRT Ready!")
             with open(output_srt, "rb") as f:
