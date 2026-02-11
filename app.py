@@ -5,14 +5,18 @@ import os
 import uuid
 import hashlib
 import shutil
-from transformers import pipeline
+
+# --- SILENCE NOISY AI WARNINGS ---
+import warnings
+from transformers import pipeline, logging as hf_logging
+warnings.filterwarnings("ignore")
+hf_logging.set_verbosity_error()
 
 # --- PAGE SETUP ---
 st.set_page_config(page_title="AI Video Transcriber", layout="wide", page_icon="🎬")
 st.title("🎬 Comprehensive AI Video Transcriber & Captioner")
 
 # --- CREATE CACHE FOLDER ---
-# This ensures a folder exists to store our completed files
 CACHE_DIR = "cache"
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -28,12 +32,12 @@ def load_akan_model():
         "automatic-speech-recognition",
         model="GiftMark/akan-whisper-model",
         chunk_length_s=30,
-        device="cpu"
+        device="cpu",
+        ignore_warning=True
     )
 
 # --- UTILITY FUNCTIONS ---
 def get_file_hash(uploaded_file):
-    """Generates a unique SHA-256 hash for the uploaded video file."""
     sha256_hash = hashlib.sha256()
     for chunk in iter(lambda: uploaded_file.read(4096), b""):
         sha256_hash.update(chunk)
@@ -79,20 +83,23 @@ export_res = st.sidebar.selectbox(
     index=2
 )
 
-# --- NEW: CACHE MANAGEMENT ---
 st.sidebar.header("🗑️ Storage Management")
-st.sidebar.markdown("If your cloud server storage gets full, click below to securely wipe all saved videos and transcripts.")
 if st.sidebar.button("Clear Server Cache"):
     if os.path.exists(CACHE_DIR):
-        # rmtree deletes the folder and everything inside it instantly
         shutil.rmtree(CACHE_DIR)
-        # Recreate the empty folder so the app doesn't crash on the next upload
         os.makedirs(CACHE_DIR)
     st.sidebar.success("✅ Server cache completely wiped!")
 
+# --- BRANDING / WATERMARK ---
+st.sidebar.header("🏷️ Branding (Watermark)")
+st.sidebar.markdown("Burn a custom studio logo or name into the top right corner of the video.")
+watermark_text = st.sidebar.text_input("Watermark Text", "Hackerslord Studios")
+watermark_size = st.sidebar.slider("Watermark Text Size", 10, 100, 24)
+watermark_opacity = st.sidebar.slider("Watermark Opacity", 0.0, 1.0, 0.5)
+
 st.sidebar.header("🎨 Caption Styling")
 font_family = st.sidebar.selectbox("Font Style", ["Arial", "Impact", "Arial Black", "Verdana", "Courier New"])
-font_size = st.sidebar.slider("Text Size", 10, 100, 24)
+font_size = st.sidebar.slider("Caption Text Size", 10, 100, 24)
 text_color = st.sidebar.color_picker("Text Color", "#FFFFFF")
 
 stroke_width = st.sidebar.slider("Stroke Width", 0, 10, 2)
@@ -109,6 +116,7 @@ elif bg_mode == "Drop Shadow":
 else:
     border_style = 3; shadow_width = 0
     final_back_color = hex_to_ass(st.sidebar.color_picker("Box Color", "#000000"), st.sidebar.slider("Box Opacity (%)", 0, 100, 80))
+
 
 # --- MAIN APP INTERFACE ---
 st.info("⚠️ **Note:** To prevent server overload, maximum file upload size is restricted to 200MB.")
@@ -166,15 +174,31 @@ if uploaded_file:
                 status_text.warning("Phase 2/4: Transcribing Akan Twi Audio (This takes a few minutes...)")
                 progress_bar.progress(50)
 
-                result = pipe(input_video, return_timestamps=True)
+                result = pipe(
+                    input_video,
+                    return_timestamps=True,
+                    generate_kwargs={"task": "transcribe"}
+                )
 
                 status_text.info("Phase 3/4: Formatting Subtitles...")
                 progress_bar.progress(75)
 
+                # --- BUG FIX: TIMESTAMP MEMORY TRACKER ---
                 with open(output_srt, "w", encoding="utf-8") as srt_file:
+                    last_known_time = 0.0
                     for i, chunk in enumerate(result["chunks"], start=1):
                         start_time = chunk["timestamp"][0]
-                        end_time = chunk["timestamp"][1] or (start_time + 3.0)
+                        end_time = chunk["timestamp"][1]
+
+                        # Catch the Hugging Face NoneType bugs and bridge the timeline
+                        if start_time is None:
+                            start_time = last_known_time
+                        if end_time is None:
+                            end_time = start_time + 3.0
+
+                        # Update the tracker for the next loop
+                        last_known_time = end_time
+
                         srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{chunk['text'].strip()}\n\n")
 
             else:
@@ -227,6 +251,11 @@ if uploaded_file:
 
                 vf_string = f"{scale_filter}subtitles={output_srt}:force_style='{style}'"
 
+                if watermark_text:
+                    safe_text = watermark_text.replace("'", "\\'").replace(":", "\\:")
+                    drawtext_filter = f",drawtext=text='{safe_text}':fontcolor=white@{watermark_opacity}:fontsize={watermark_size}:x=w-tw-20:y=20"
+                    vf_string += drawtext_filter
+
                 try:
                     (
                         ffmpeg.input(input_video)
@@ -237,7 +266,7 @@ if uploaded_file:
 
                     colA, colB = st.columns(2)
                     with open(output_video, "rb") as f:
-                        colA.download_button("⬇️ Download Captioned Video", f, file_name="captioned_video.mp4")
+                        colA.download_button("⬇️ Download Captioned Video", f, file_name="hackerslord_captioned.mp4")
                     with open(output_srt, "rb") as f:
                         colB.download_button("📝 Download .SRT File", f, file_name="subtitles.srt")
 
