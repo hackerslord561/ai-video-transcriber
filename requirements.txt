@@ -6,3 +6,4 @@ transformers
 torchaudio
 ffmpeg
 whisper
+requests

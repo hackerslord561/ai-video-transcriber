@@ -2,9 +2,9 @@ import streamlit as st
 import whisper
 import ffmpeg
 import os
-import uuid
 import hashlib
 import shutil
+import requests
 
 # --- SILENCE NOISY AI WARNINGS ---
 import warnings
@@ -15,6 +15,10 @@ hf_logging.set_verbosity_error()
 # --- PAGE SETUP ---
 st.set_page_config(page_title="AI Video Transcriber", layout="wide", page_icon="🎬")
 st.title("🎬 Comprehensive AI Video Transcriber & Captioner")
+
+# --- INITIALIZE SESSION STATE FOR UI PERSISTENCE ---
+if "action_type" not in st.session_state:
+    st.session_state.action_type = None
 
 # --- CREATE CACHE FOLDER ---
 CACHE_DIR = "cache"
@@ -90,13 +94,57 @@ if st.sidebar.button("Clear Server Cache"):
         os.makedirs(CACHE_DIR)
     st.sidebar.success("✅ Server cache completely wiped!")
 
-# --- BRANDING / WATERMARK ---
+# --- MONETIZATION: LIVE PAYSTACK SUBSCRIPTION CHECK ---
 st.sidebar.header("🏷️ Branding (Watermark)")
-st.sidebar.markdown("Burn a custom studio logo or name into the top right corner of the video.")
-watermark_text = st.sidebar.text_input("Watermark Text", "Hackerslord Studios")
-watermark_size = st.sidebar.slider("Watermark Text Size", 10, 100, 24)
-watermark_opacity = st.sidebar.slider("Watermark Opacity", 0.0, 1.0, 0.5)
 
+PAYSTACK_SECRET = os.environ.get("PAYSTACK_SECRET_KEY")
+
+def verify_subscription(sub_code):
+    if not PAYSTACK_SECRET:
+        return False
+
+    url = f"https://api.paystack.co/subscription/{sub_code}"
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET}",
+        "Cache-Control": "no-cache"
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get("data", {}).get("status") == "active":
+                return True
+        return False
+    except:
+        return False
+
+pro_input = st.sidebar.text_input("🔑 Enter Paystack Subscription Code (e.g., SUB_...)", type="password")
+
+is_pro = False
+if pro_input:
+    with st.sidebar:
+        with st.spinner("Checking subscription status..."):
+            is_pro = verify_subscription(pro_input)
+
+if is_pro:
+    st.sidebar.success("🔓 Active Subscription Confirmed! Watermark tools unlocked.")
+    watermark_text = st.sidebar.text_input("Watermark Text (Leave blank for none)", "")
+    watermark_size = st.sidebar.slider("Watermark Text Size", 10, 100, 24)
+    watermark_opacity = st.sidebar.slider("Watermark Opacity", 0.0, 1.0, 0.5)
+else:
+    st.sidebar.warning("🔒 App renders with 'Hackerslord Studios' watermark.")
+    if pro_input:
+        st.sidebar.error("❌ Subscription inactive or invalid code.")
+
+    paystack_url = "https://paystack.shop/pay/spb9j8vcmc"
+    st.sidebar.markdown(f"**[💳 Subscribe for $2/month to remove watermarks!]({paystack_url})**")
+
+    watermark_text = "Hackerslord Studios"
+    watermark_size = 24
+    watermark_opacity = 0.5
+
+# --- CAPTION STYLING ---
 st.sidebar.header("🎨 Caption Styling")
 font_family = st.sidebar.selectbox("Font Style", ["Arial", "Impact", "Arial Black", "Verdana", "Courier New"])
 font_size = st.sidebar.slider("Caption Text Size", 10, 100, 24)
@@ -127,6 +175,7 @@ if uploaded_file:
 
     input_video = os.path.join(CACHE_DIR, f"{file_hash}_input.mp4")
     output_srt = os.path.join(CACHE_DIR, f"{file_hash}_subs.srt")
+    output_txt = os.path.join(CACHE_DIR, f"{file_hash}_transcript.txt")
     output_video = os.path.join(CACHE_DIR, f"{file_hash}_final.mp4")
     output_mp3 = os.path.join(CACHE_DIR, f"{file_hash}_audio.mp3")
 
@@ -135,17 +184,16 @@ if uploaded_file:
 
     st.video(input_video)
 
-    col1, col2, col3 = st.columns(3)
-    generate_srt_only = col1.button("📄 Generate SRT Only", type="secondary")
-    extract_mp3_only = col2.button("🎵 Extract MP3 Audio", type="secondary")
-    generate_and_burn = col3.button("🎬 Generate & Burn Video", type="primary")
+    col1, col2, col3, col4 = st.columns(4)
+    # Using session state to remember which button was clicked!
+    if col1.button("📄 Generate SRT", type="secondary"): st.session_state.action_type = "srt"
+    if col2.button("📝 Generate TXT", type="secondary"): st.session_state.action_type = "txt"
+    if col3.button("🎵 Extract MP3", type="secondary"): st.session_state.action_type = "mp3"
+    if col4.button("🎬 Burn Video", type="primary"): st.session_state.action_type = "burn"
 
-    if extract_mp3_only:
-        if os.path.exists(output_mp3):
-            st.success("⚡ Audio found in cache! Instant download ready.")
-            with open(output_mp3, "rb") as f:
-                st.download_button("⬇️ Download MP3 File", f, file_name="audio_track.mp3", mime="audio/mpeg")
-        else:
+    # --- PROCESSING BLOCK ---
+    if st.session_state.action_type == "mp3":
+        if not os.path.exists(output_mp3):
             with st.spinner("🎵 Ripping high-quality MP3 audio from video..."):
                 try:
                     (
@@ -153,16 +201,11 @@ if uploaded_file:
                         .output(output_mp3, acodec="libmp3lame", q=2)
                         .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
                     )
-                    st.success("✅ Audio extracted successfully in seconds!")
-                    with open(output_mp3, "rb") as f:
-                        st.download_button("⬇️ Download MP3 File", f, file_name="audio_track.mp3", mime="audio/mpeg")
                 except ffmpeg.Error as e:
                     st.error(f"FFmpeg Error: {e.stderr.decode('utf-8')}")
 
-    elif generate_srt_only or generate_and_burn:
-        if os.path.exists(output_srt):
-            st.success("⚡ Previous transcription found in cache! Skipping AI processing...")
-        else:
+    elif st.session_state.action_type in ["srt", "txt", "burn"]:
+        if not (os.path.exists(output_srt) and os.path.exists(output_txt)):
             progress_bar = st.progress(0)
             status_text = st.empty()
 
@@ -183,23 +226,22 @@ if uploaded_file:
                 status_text.info("Phase 3/4: Formatting Subtitles...")
                 progress_bar.progress(75)
 
-                # --- BUG FIX: TIMESTAMP MEMORY TRACKER ---
-                with open(output_srt, "w", encoding="utf-8") as srt_file:
+                with open(output_srt, "w", encoding="utf-8") as srt_file, open(output_txt, "w", encoding="utf-8") as txt_file:
                     last_known_time = 0.0
                     for i, chunk in enumerate(result["chunks"], start=1):
                         start_time = chunk["timestamp"][0]
                         end_time = chunk["timestamp"][1]
 
-                        # Catch the Hugging Face NoneType bugs and bridge the timeline
                         if start_time is None:
                             start_time = last_known_time
                         if end_time is None:
                             end_time = start_time + 3.0
 
-                        # Update the tracker for the next loop
                         last_known_time = end_time
+                        text = chunk['text'].strip()
 
-                        srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{chunk['text'].strip()}\n\n")
+                        srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{text}\n\n")
+                        txt_file.write(f"{text}\n")
 
             else:
                 model = load_standard_model(model_size)
@@ -217,20 +259,16 @@ if uploaded_file:
                 status_text.info("Phase 3/4: Formatting Subtitles...")
                 progress_bar.progress(75)
 
-                with open(output_srt, "w", encoding="utf-8") as srt_file:
+                with open(output_srt, "w", encoding="utf-8") as srt_file, open(output_txt, "w", encoding="utf-8") as txt_file:
                     for i, segment in enumerate(result["segments"], start=1):
-                        srt_file.write(f"{i}\n{format_timestamp(segment['start'])} --> {format_timestamp(segment['end'])}\n{segment['text'].strip()}\n\n")
+                        text = segment['text'].strip()
+                        srt_file.write(f"{i}\n{format_timestamp(segment['start'])} --> {format_timestamp(segment['end'])}\n{text}\n\n")
+                        txt_file.write(f"{text}\n")
 
-            status_text.success("Phase 3/4 Complete! Transcription saved to cache.")
             progress_bar.progress(100)
             status_text.empty()
 
-        if generate_srt_only:
-            st.success("📄 SRT Ready!")
-            with open(output_srt, "rb") as f:
-                st.download_button("📝 Download .SRT File", f, file_name="subtitles.srt")
-
-        if generate_and_burn:
+        if st.session_state.action_type == "burn" and not os.path.exists(output_video):
             with st.spinner(f"🎨 Burning styled captions onto video at {export_res}..."):
                 scale_filter = ""
                 if export_res == "1080p":
@@ -262,13 +300,33 @@ if uploaded_file:
                         .output(output_video, vf=vf_string)
                         .run(overwrite_output=True, capture_stdout=True, capture_stderr=True)
                     )
-                    st.success("✅ Complete! Video Rendering Finished.")
-
-                    colA, colB = st.columns(2)
-                    with open(output_video, "rb") as f:
-                        colA.download_button("⬇️ Download Captioned Video", f, file_name="hackerslord_captioned.mp4")
-                    with open(output_srt, "rb") as f:
-                        colB.download_button("📝 Download .SRT File", f, file_name="subtitles.srt")
-
                 except ffmpeg.Error as e:
                     st.error(f"Error burning subtitles: {e.stderr.decode('utf-8')}")
+
+    # --- PERSISTENT DOWNLOAD PANEL ---
+    if st.session_state.action_type:
+        st.markdown("---")
+        st.subheader("🎉 Your Files are Ready!")
+
+        dl_col1, dl_col2, dl_col3, dl_col4 = st.columns(4)
+
+        if st.session_state.action_type == "mp3" and os.path.exists(output_mp3):
+            with open(output_mp3, "rb") as f:
+                dl_col1.download_button("⬇️ Download MP3", f, file_name="audio_track.mp3", mime="audio/mpeg")
+
+        elif st.session_state.action_type in ["srt", "txt", "burn"]:
+            if os.path.exists(output_srt):
+                with open(output_srt, "rb") as f:
+                    dl_col1.download_button("📝 Download .SRT", f, file_name="subtitles.srt")
+            if os.path.exists(output_txt):
+                with open(output_txt, "rb") as f:
+                    dl_col2.download_button("📄 Download .TXT", f, file_name="transcript.txt")
+            if st.session_state.action_type == "burn" and os.path.exists(output_video):
+                with open(output_video, "rb") as f:
+                    dl_col3.download_button("🎬 Download Video", f, file_name="hackerslord_captioned.mp4")
+
+        # The crucial X button to dismiss the panel!
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("❌ Close & Clear Results"):
+            st.session_state.action_type = None
+            st.rerun() # instantly refreshes the page and hides the panel
