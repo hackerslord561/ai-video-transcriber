@@ -3,3 +3,7 @@ venv
 .idea\
 venv\
 .idea
+cache
+temp_subs.srt
+temp_input.mp4
+final_output.mp4
