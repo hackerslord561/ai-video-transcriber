@@ -1,0 +1,8 @@
+streamlit
+openai-whisper
+ffmpeg-python
+torch
+transformers
+torchaudio
+ffmpeg
+whisper
