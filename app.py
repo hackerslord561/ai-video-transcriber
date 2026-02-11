@@ -137,7 +137,7 @@ else:
     if pro_input:
         st.sidebar.error("❌ Subscription inactive or invalid code.")
 
-    paystack_url = "https://paystack.shop/pay/spb9j8vcmc"
+    paystack_url = "https://paystack.com/pay/YOUR_SUBSCRIPTION_PLAN"
     st.sidebar.markdown(f"**[💳 Subscribe for $2/month to remove watermarks!]({paystack_url})**")
 
     watermark_text = "Hackerslord Studios"
@@ -217,10 +217,16 @@ if uploaded_file:
                 status_text.warning("Phase 2/4: Transcribing Akan Twi Audio (This takes a few minutes...)")
                 progress_bar.progress(50)
 
+                # --- NEW ANTI-HALLUCINATION GUARDRAILS ---
                 result = pipe(
                     input_video,
                     return_timestamps=True,
-                    generate_kwargs={"task": "transcribe"}
+                    generate_kwargs={
+                        "task": "transcribe",
+                        "condition_on_prev_tokens": False,
+                        "repetition_penalty": 1.2,
+                        "no_repeat_ngram_size": 3
+                    }
                 )
 
                 status_text.info("Phase 3/4: Formatting Subtitles...")
@@ -240,8 +246,10 @@ if uploaded_file:
                         last_known_time = end_time
                         text = chunk['text'].strip()
 
-                        srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{text}\n\n")
-                        txt_file.write(f"{text}\n")
+                        # Only write the line if it actually produced text (skips empty hallucinations)
+                        if text:
+                            srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{text}\n\n")
+                            txt_file.write(f"{text}\n")
 
             else:
                 model = load_standard_model(model_size)
@@ -325,8 +333,7 @@ if uploaded_file:
                 with open(output_video, "rb") as f:
                     dl_col3.download_button("🎬 Download Video", f, file_name="hackerslord_captioned.mp4")
 
-        # The crucial X button to dismiss the panel!
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("❌ Close & Clear Results"):
             st.session_state.action_type = None
-            st.rerun() # instantly refreshes the page and hides the panel
+            st.rerun()
