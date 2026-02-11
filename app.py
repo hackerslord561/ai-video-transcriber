@@ -94,13 +94,14 @@ if st.sidebar.button("Clear Server Cache"):
         os.makedirs(CACHE_DIR)
     st.sidebar.success("✅ Server cache completely wiped!")
 
-# --- MONETIZATION: LIVE PAYSTACK SUBSCRIPTION CHECK ---
+# --- MONETIZATION: SECURE EMAIL & SUBSCRIPTION CHECK ---
 st.sidebar.header("🏷️ Branding (Watermark)")
 
 PAYSTACK_SECRET = os.environ.get("PAYSTACK_SECRET_KEY")
 
-def verify_subscription(sub_code):
-    if not PAYSTACK_SECRET:
+def verify_subscription(sub_code, user_email):
+    """Pings Paystack to verify if the sub is active AND matches the user's email."""
+    if not PAYSTACK_SECRET or not user_email or not sub_code:
         return False
 
     url = f"https://api.paystack.co/subscription/{sub_code}"
@@ -113,19 +114,34 @@ def verify_subscription(sub_code):
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             data = response.json()
-            if data.get("data", {}).get("status") == "active":
+            # 1. Check if the subscription is active
+            status = data.get("data", {}).get("status")
+            # 2. Extract the customer email attached to this Paystack subscription
+            api_email = data.get("data", {}).get("customer", {}).get("email", "")
+
+            # If both conditions are met (case-insensitive email match), unlock it!
+            if status == "active" and api_email.strip().lower() == user_email.strip().lower():
                 return True
         return False
     except:
         return False
 
+# Security Input Fields
+user_email_input = st.sidebar.text_input("📧 Enter your Email Address")
+
+# Dynamic instructions based on whether they entered an email
+if user_email_input:
+    st.sidebar.info(f"⚠️ **IMPORTANT:** When purchasing your subscription on Paystack, you MUST use exactly **{user_email_input}** or your code will not work!")
+else:
+    st.sidebar.warning("⚠️ Enter your email address above to unlock or purchase a subscription.")
+
 pro_input = st.sidebar.text_input("🔑 Enter Paystack Subscription Code (e.g., SUB_...)", type="password")
 
 is_pro = False
-if pro_input:
+if pro_input and user_email_input:
     with st.sidebar:
-        with st.spinner("Checking subscription status..."):
-            is_pro = verify_subscription(pro_input)
+        with st.spinner("Verifying email and subscription securely..."):
+            is_pro = verify_subscription(pro_input, user_email_input)
 
 if is_pro:
     st.sidebar.success("🔓 Active Subscription Confirmed! Watermark tools unlocked.")
@@ -133,11 +149,11 @@ if is_pro:
     watermark_size = st.sidebar.slider("Watermark Text Size", 10, 100, 24)
     watermark_opacity = st.sidebar.slider("Watermark Opacity", 0.0, 1.0, 0.5)
 else:
-    st.sidebar.warning("🔒 App renders with 'Hackerslord Studios' watermark.")
-    if pro_input:
-        st.sidebar.error("❌ Subscription inactive or invalid code.")
+    st.sidebar.error("🔒 App renders with 'Hackerslord Studios' watermark.")
+    if pro_input and user_email_input:
+        st.sidebar.error("❌ Verification failed. Code is invalid, inactive, or does not match this email address.")
 
-    paystack_url = "https://paystack.com/pay/YOUR_SUBSCRIPTION_PLAN"
+    paystack_url = "https://paystack.shop/pay/spb9j8vcmc"
     st.sidebar.markdown(f"**[💳 Subscribe for $2/month to remove watermarks!]({paystack_url})**")
 
     watermark_text = "Hackerslord Studios"
@@ -246,7 +262,6 @@ if uploaded_file:
                         last_known_time = end_time
                         text = chunk['text'].strip()
 
-                        # Only write the line if it actually produced text (skips empty hallucinations)
                         if text:
                             srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{text}\n\n")
                             txt_file.write(f"{text}\n")
