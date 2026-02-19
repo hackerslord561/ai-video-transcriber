@@ -32,12 +32,12 @@ def load_standard_model(size):
 
 @st.cache_resource(show_spinner=False)
 def load_akan_model():
+    # Using Meta's Enterprise MMS model mapped specifically to the Akan ('aka') language adapter
     return pipeline(
         "automatic-speech-recognition",
-        model="GiftMark/akan-whisper-model",
-        chunk_length_s=30,
-        device="cpu",
-        ignore_warning=True
+        model="facebook/mms-1b-all",
+        model_kwargs={"target_lang": "aka", "ignore_mismatched_sizes": True},
+        device="cpu"
     )
 
 # --- UTILITY FUNCTIONS ---
@@ -76,7 +76,7 @@ LANGUAGES = [
 selected_lang = st.sidebar.selectbox("Spoken Language", LANGUAGES, index=0)
 
 if selected_lang == "Akan (Twi)":
-    st.sidebar.info("🇬🇭 **Akan (Twi):** Using custom Hugging Face model.")
+    st.sidebar.info("🇬🇭 **Akan (Twi):** Powered by Meta MMS Enterprise Model.")
 elif selected_lang == "Auto-Detect":
     st.sidebar.success("🌐 **Auto-Detect Active.**")
 
@@ -100,7 +100,6 @@ st.sidebar.header("🏷️ Branding (Watermark)")
 PAYSTACK_SECRET = os.environ.get("PAYSTACK_SECRET_KEY")
 
 def verify_subscription(sub_code, user_email):
-    """Pings Paystack to verify if the sub is active AND matches the user's email."""
     if not PAYSTACK_SECRET or not user_email or not sub_code:
         return False
 
@@ -114,22 +113,17 @@ def verify_subscription(sub_code, user_email):
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
             data = response.json()
-            # 1. Check if the subscription is active
             status = data.get("data", {}).get("status")
-            # 2. Extract the customer email attached to this Paystack subscription
             api_email = data.get("data", {}).get("customer", {}).get("email", "")
 
-            # If both conditions are met (case-insensitive email match), unlock it!
             if status == "active" and api_email.strip().lower() == user_email.strip().lower():
                 return True
         return False
     except:
         return False
 
-# Security Input Fields
 user_email_input = st.sidebar.text_input("📧 Enter your Email Address")
 
-# Dynamic instructions based on whether they entered an email
 if user_email_input:
     st.sidebar.info(f"⚠️ **IMPORTANT:** When purchasing your subscription on Paystack, you MUST use exactly **{user_email_input}** or your code will not work!")
 else:
@@ -201,7 +195,6 @@ if uploaded_file:
     st.video(input_video)
 
     col1, col2, col3, col4 = st.columns(4)
-    # Using session state to remember which button was clicked!
     if col1.button("📄 Generate SRT", type="secondary"): st.session_state.action_type = "srt"
     if col2.button("📝 Generate TXT", type="secondary"): st.session_state.action_type = "txt"
     if col3.button("🎵 Extract MP3", type="secondary"): st.session_state.action_type = "mp3"
@@ -230,41 +223,59 @@ if uploaded_file:
 
             if selected_lang == "Akan (Twi)":
                 pipe = load_akan_model()
-                status_text.warning("Phase 2/4: Transcribing Akan Twi Audio (This takes a few minutes...)")
+                status_text.warning("Phase 2/4: Transcribing with Meta MMS (This takes a few minutes...)")
                 progress_bar.progress(50)
 
-                # --- NEW ANTI-HALLUCINATION GUARDRAILS ---
+                # MMS requires chunking for long audio and naturally returns word-level data
                 result = pipe(
                     input_video,
-                    return_timestamps=True,
-                    generate_kwargs={
-                        "task": "transcribe",
-                        "condition_on_prev_tokens": False,
-                        "repetition_penalty": 1.2,
-                        "no_repeat_ngram_size": 3
-                    }
+                    chunk_length_s=30,
+                    return_timestamps="word"
                 )
 
                 status_text.info("Phase 3/4: Formatting Subtitles...")
                 progress_bar.progress(75)
 
+                # --- NEW SRT COMPILER FOR META MMS ---
                 with open(output_srt, "w", encoding="utf-8") as srt_file, open(output_txt, "w", encoding="utf-8") as txt_file:
-                    last_known_time = 0.0
-                    for i, chunk in enumerate(result["chunks"], start=1):
-                        start_time = chunk["timestamp"][0]
-                        end_time = chunk["timestamp"][1]
+                    chunks_data = result.get("chunks", [])
 
-                        if start_time is None:
-                            start_time = last_known_time
-                        if end_time is None:
-                            end_time = start_time + 3.0
+                    srt_idx = 1
+                    current_chunk = {"text": "", "start": None, "end": None}
 
-                        last_known_time = end_time
-                        text = chunk['text'].strip()
+                    for word_data in chunks_data:
+                        word = word_data["text"]
+                        timestamp = word_data.get("timestamp", (None, None))
+                        start, end = timestamp
 
-                        if text:
-                            srt_file.write(f"{i}\n{format_timestamp(start_time)} --> {format_timestamp(end_time)}\n{text}\n\n")
-                            txt_file.write(f"{text}\n")
+                        if start is None or end is None:
+                            continue
+
+                        # If this is the start of a new block, set the start time
+                        if current_chunk["start"] is None:
+                            current_chunk["start"] = start
+                            current_chunk["end"] = end
+                            current_chunk["text"] = word
+
+                        # If the block is shorter than 3 seconds, keep appending words to it
+                        elif (end - current_chunk["start"]) <= 3.0:
+                            current_chunk["end"] = end
+                            # Prevent double spacing issues
+                            current_chunk["text"] = (current_chunk["text"] + " " + word).strip()
+
+                        # If the block hits 3 seconds, write it to the file and start a new block
+                        else:
+                            srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{current_chunk['text'].strip()}\n\n")
+                            txt_file.write(f"{current_chunk['text'].strip()}\n")
+                            srt_idx += 1
+
+                            # Reset for the next word
+                            current_chunk = {"start": start, "end": end, "text": word}
+
+                    # Write the final remaining block to the file
+                    if current_chunk["start"] is not None:
+                        srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{current_chunk['text'].strip()}\n\n")
+                        txt_file.write(f"{current_chunk['text'].strip()}\n")
 
             else:
                 model = load_standard_model(model_size)
