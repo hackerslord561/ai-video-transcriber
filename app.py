@@ -5,7 +5,7 @@ import os
 import hashlib
 import shutil
 import requests
-from deep_translator import GoogleTranslator # --- NEW: The Translation Bridge ---
+from deep_translator import GoogleTranslator
 
 # --- SILENCE NOISY AI WARNINGS ---
 import warnings
@@ -266,7 +266,7 @@ if uploaded_file:
                                 try:
                                     final_text = GoogleTranslator(source='auto', target='en').translate(final_text)
                                 except:
-                                    pass # If the API fails for a second, it falls back to original Twi
+                                    pass
 
                             srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{final_text}\n\n")
                             txt_file.write(f"{final_text}\n")
@@ -276,7 +276,6 @@ if uploaded_file:
                     if current_chunk["start"] is not None:
                         final_text = current_chunk['text'].strip()
 
-                        # --- INTERCEPT & TRANSLATE FOR THE FINAL CHUNK ---
                         if task == "Translate to English" and final_text:
                             try:
                                 final_text = GoogleTranslator(source='auto', target='en').translate(final_text)
@@ -291,9 +290,10 @@ if uploaded_file:
                 status_text.warning("Phase 2/4: Transcribing Audio (This takes a few minutes...)")
                 progress_bar.progress(50)
 
+                # --- BUG FIX: CORRECT OPENAI WHISPER KWARG ---
                 options = {
                     "fp16": False,
-                    "condition_on_prev_tokens": False
+                    "condition_on_previous_text": False
                 }
 
                 if selected_lang != "Auto-Detect":
