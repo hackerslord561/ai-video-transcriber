@@ -5,6 +5,7 @@ import os
 import hashlib
 import shutil
 import requests
+from deep_translator import GoogleTranslator # --- NEW: The Translation Bridge ---
 
 # --- SILENCE NOISY AI WARNINGS ---
 import warnings
@@ -32,7 +33,6 @@ def load_standard_model(size):
 
 @st.cache_resource(show_spinner=False)
 def load_akan_model():
-    # Using Meta's Enterprise MMS model mapped specifically to the Akan ('aka') language adapter
     return pipeline(
         "automatic-speech-recognition",
         model="facebook/mms-1b-all",
@@ -147,7 +147,6 @@ else:
     if pro_input and user_email_input:
         st.sidebar.error("❌ Verification failed. Code is invalid, inactive, or does not match this email address.")
 
-    # Updated to the official live Paystack Link
     paystack_url = "https://paystack.shop/pay/spb9j8vcmc"
     st.sidebar.markdown(f"**[💳 Subscribe for $2/month to remove watermarks!]({paystack_url})**")
 
@@ -233,7 +232,7 @@ if uploaded_file:
                     return_timestamps="word"
                 )
 
-                status_text.info("Phase 3/4: Formatting Subtitles...")
+                status_text.info("Phase 3/4: Formatting & Translating Subtitles...")
                 progress_bar.progress(75)
 
                 with open(output_srt, "w", encoding="utf-8") as srt_file, open(output_txt, "w", encoding="utf-8") as txt_file:
@@ -260,21 +259,38 @@ if uploaded_file:
                             current_chunk["text"] = (current_chunk["text"] + " " + word).strip()
 
                         else:
-                            srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{current_chunk['text'].strip()}\n\n")
-                            txt_file.write(f"{current_chunk['text'].strip()}\n")
+                            final_text = current_chunk['text'].strip()
+
+                            # --- INTERCEPT & TRANSLATE ---
+                            if task == "Translate to English" and final_text:
+                                try:
+                                    final_text = GoogleTranslator(source='auto', target='en').translate(final_text)
+                                except:
+                                    pass # If the API fails for a second, it falls back to original Twi
+
+                            srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{final_text}\n\n")
+                            txt_file.write(f"{final_text}\n")
                             srt_idx += 1
                             current_chunk = {"start": start, "end": end, "text": word}
 
                     if current_chunk["start"] is not None:
-                        srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{current_chunk['text'].strip()}\n\n")
-                        txt_file.write(f"{current_chunk['text'].strip()}\n")
+                        final_text = current_chunk['text'].strip()
+
+                        # --- INTERCEPT & TRANSLATE FOR THE FINAL CHUNK ---
+                        if task == "Translate to English" and final_text:
+                            try:
+                                final_text = GoogleTranslator(source='auto', target='en').translate(final_text)
+                            except:
+                                pass
+
+                        srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{final_text}\n\n")
+                        txt_file.write(f"{final_text}\n")
 
             else:
                 model = load_standard_model(model_size)
                 status_text.warning("Phase 2/4: Transcribing Audio (This takes a few minutes...)")
                 progress_bar.progress(50)
 
-                # --- BUG FIX: FORCE FP32 AND IGNORE EMPTY SILENCE LOGIC ---
                 options = {
                     "fp16": False,
                     "condition_on_prev_tokens": False
