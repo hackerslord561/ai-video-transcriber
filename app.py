@@ -147,6 +147,7 @@ else:
     if pro_input and user_email_input:
         st.sidebar.error("❌ Verification failed. Code is invalid, inactive, or does not match this email address.")
 
+    # Updated to the official live Paystack Link
     paystack_url = "https://paystack.shop/pay/spb9j8vcmc"
     st.sidebar.markdown(f"**[💳 Subscribe for $2/month to remove watermarks!]({paystack_url})**")
 
@@ -226,7 +227,6 @@ if uploaded_file:
                 status_text.warning("Phase 2/4: Transcribing with Meta MMS (This takes a few minutes...)")
                 progress_bar.progress(50)
 
-                # MMS requires chunking for long audio and naturally returns word-level data
                 result = pipe(
                     input_video,
                     chunk_length_s=30,
@@ -236,7 +236,6 @@ if uploaded_file:
                 status_text.info("Phase 3/4: Formatting Subtitles...")
                 progress_bar.progress(75)
 
-                # --- NEW SRT COMPILER FOR META MMS ---
                 with open(output_srt, "w", encoding="utf-8") as srt_file, open(output_txt, "w", encoding="utf-8") as txt_file:
                     chunks_data = result.get("chunks", [])
 
@@ -251,28 +250,21 @@ if uploaded_file:
                         if start is None or end is None:
                             continue
 
-                        # If this is the start of a new block, set the start time
                         if current_chunk["start"] is None:
                             current_chunk["start"] = start
                             current_chunk["end"] = end
                             current_chunk["text"] = word
 
-                        # If the block is shorter than 3 seconds, keep appending words to it
                         elif (end - current_chunk["start"]) <= 3.0:
                             current_chunk["end"] = end
-                            # Prevent double spacing issues
                             current_chunk["text"] = (current_chunk["text"] + " " + word).strip()
 
-                        # If the block hits 3 seconds, write it to the file and start a new block
                         else:
                             srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{current_chunk['text'].strip()}\n\n")
                             txt_file.write(f"{current_chunk['text'].strip()}\n")
                             srt_idx += 1
-
-                            # Reset for the next word
                             current_chunk = {"start": start, "end": end, "text": word}
 
-                    # Write the final remaining block to the file
                     if current_chunk["start"] is not None:
                         srt_file.write(f"{srt_idx}\n{format_timestamp(current_chunk['start'])} --> {format_timestamp(current_chunk['end'])}\n{current_chunk['text'].strip()}\n\n")
                         txt_file.write(f"{current_chunk['text'].strip()}\n")
@@ -282,19 +274,28 @@ if uploaded_file:
                 status_text.warning("Phase 2/4: Transcribing Audio (This takes a few minutes...)")
                 progress_bar.progress(50)
 
-                options = {}
+                # --- BUG FIX: FORCE FP32 AND IGNORE EMPTY SILENCE LOGIC ---
+                options = {
+                    "fp16": False,
+                    "condition_on_prev_tokens": False
+                }
+
                 if selected_lang != "Auto-Detect":
                     options["language"] = selected_lang.lower()
                 if task == "Translate to English":
                     options["task"] = "translate"
 
-                result = model.transcribe(input_video, **options)
+                try:
+                    result = model.transcribe(input_video, **options)
+                except RuntimeError as e:
+                    st.error(f"Transcription failed: {e}. Please try a different video or model size.")
+                    result = {"segments": []}
 
                 status_text.info("Phase 3/4: Formatting Subtitles...")
                 progress_bar.progress(75)
 
                 with open(output_srt, "w", encoding="utf-8") as srt_file, open(output_txt, "w", encoding="utf-8") as txt_file:
-                    for i, segment in enumerate(result["segments"], start=1):
+                    for i, segment in enumerate(result.get("segments", []), start=1):
                         text = segment['text'].strip()
                         srt_file.write(f"{i}\n{format_timestamp(segment['start'])} --> {format_timestamp(segment['end'])}\n{text}\n\n")
                         txt_file.write(f"{text}\n")
